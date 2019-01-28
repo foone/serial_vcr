@@ -1,6 +1,6 @@
 # serial_vcr
-serial_vcr provides a simple interface for controlling a JVC SR-S365U V
-ideo Cassette Recorder over a serial port from Python (2.x).
+serial_vcr provides a simple interface for controlling a JVC SR-S365U 
+Video Cassette Recorder over a serial port from Python (2.x).
 
 # Requirements 
 
