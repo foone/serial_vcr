@@ -1,5 +1,5 @@
 import serial, sys, time, datetime
-
+DEBUG_MODE = False
 
 ACK                 = 0x0A
 NAK                 = 0x0B
@@ -107,17 +107,17 @@ STATUS_SENSE_MODE_BITS=(
 
 SPEED_TABLE = (
 	'STILL',
-	'1/30',
-	'1/18',
-	'1/6',
-	'INVALID(4)'        # 4 is missing from the table for unknown reasons
-	'1',
-	'2(-3)',            # Forward direction: +2x, reverse direction: -3x
-	'5',
-	'7',
-	'11',
-	'15',
-	'24',               # x24 (or more)
+	'x1/30',
+	'x1/18',
+	'x1/6',
+	'INVALID(4)',       # 4 is missing from the table for unknown reasons
+	'x1',
+	'x2(-3)',           # Forward direction: +2x, reverse direction: -3x
+	'x5',
+	'x7',
+	'x11',
+	'x15',
+	'x24',              # x24 (or more)
 	'INVALID(C)',       # The table only defines entries up through 0xB, so 
 	'INVALID(D)',       # C/D/E/F are presumably invalid and impossible.
 	'INVALID(E)',
@@ -223,8 +223,11 @@ class VCR(object):
 		modes = []
 		for i, status_byte in enumerate(STATUS_SENSE_MODE_BITS):
 			modes.extend(translate_bits(data[i], status_byte))
-		SPEED  = SPEED_TABLE[ord(data[4]) & 0xF]
-		return modes + [SPEED]
+		raw_speed = ord(data[4]) & 0xF
+		output = modes + [SPEED_TABLE[raw_speed]]
+		if DEBUG_MODE:
+			print 'status_sense modes:', output
+		return output
 
 
 	def rewind_to_beginning(self):
@@ -251,7 +254,9 @@ class VCR(object):
 		abort_time = None if timeout is None else time.time() + timeout
 		while mode not in self.status_sense():
 			time.sleep(1)
-			if abort_time is not None and abort_time>time.time():
+			if abort_time is not None and abort_time<time.time():
+				if DEBUG_MODE:
+					print 'Aborting wait until mode',mode
 				return False
 		return True
 
@@ -296,15 +301,11 @@ if __name__ == '__main__':
 	else:
 		print 'WARNING: NOT A VCR! POSSIBLY A DECEPTICON! RUN!'
 	vcr.oneshot(POWER_ON)
-	if 0:
-		vcr.rewind_to_beginning()
-		
-		start = time.time()
-		vcr.oneshot(FF)
-		time.sleep(5)
-		vcr.wait_until_mode('STOP')
-		print 'went to end in {:0.2f} seconds'.format(time.time()-start)
-
-	current_time = vcr.get_ctl_time()
-	print current_time
+	vcr.oneshot(STOP)
+	vcr.rewind_to_beginning()
+	#vcr.oneshot(PLAY)
+	#vcr.wait_until_mode('PLAY', timeout = 10)	
+	#vcr.wait_until_mode('FOREVER')
+	#current_time = vcr.get_ctl_time()
+	#print current_time
 
