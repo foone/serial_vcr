@@ -175,6 +175,21 @@ class VCR(object):
 		SPEED  = SPEED_TABLE[ord(data[4]) & 0xF]
 		return modes + [SPEED]
 
+	def rewind_to_beginning(self):
+		self.oneshot(REW)
+		self.wait_until_mode('REW', timeout = 10)
+		self.wait_until_mode('STOP')
+		# TODO: Should we have some kind of timeout for STOP?
+		# What if the VCR errors out and powers off?
+
+	def wait_until_mode(self, mode, timeout = None):
+		abort_time = None if timeout is None else time.time() + timeout
+		while mode not in self.status_sense():
+			time.sleep(1)
+			if abort_time is not None and abort_time>time.time():
+				return False
+		return True
+
 	def oneshot(self, command):
 		ret = self.converse(command)
 		if ret != '\x0A':
@@ -199,4 +214,6 @@ if __name__ == '__main__':
 	else:
 		print 'WARNING: NOT A VCR! POSSIBLY A DECEPTICON! RUN!'
 	vcr.oneshot(POWER_ON)
-	print vcr.status_sense()
+	start = time.time()
+	vcr.rewind_to_beginning()
+	print 'Rewound in {:0.2f} seconds'.format(time.time()-start)
