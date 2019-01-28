@@ -10,7 +10,7 @@ ideo Cassette Recorder over a serial port from Python (2.x).
 
 # Usage
 
-import serial_vcr, create a VCR object with the port (and optional baud rate), and then call vcr.oneshot using various constant for commands.
+import serial_vcr, create a VCR object with the port (and optional baud rate), and then call vcr.oneshot using various constants from the serial_vcr module.
 
 Example:
 
