@@ -1,4 +1,4 @@
-import serial, sys, time
+import serial, sys, time, datetime
 
 
 ACK                 = 0x0A
@@ -14,6 +14,12 @@ EJECT               = 0xA3
 CASSETTE_OUT        = 0x03
 PLAY                = 0x3A
 STILL               = 0x4F
+
+COUNTER_RESET       = 0xE2
+CURRENT_CTL_SENSE   = 0xD9
+CURRENT_LTC_SENSE   = 0xDC
+ENTER               = 0x40
+
 
 STATUS_SENSE        = 0xD7
 JVC_STATUS_SENSE    = 0xDD
@@ -104,6 +110,7 @@ SPEED_TABLE = (
 	'1/30',
 	'1/18',
 	'1/6',
+	'INVALID(4)'        # 4 is missing from the table for unknown reasons
 	'1',
 	'2(-3)',            # Forward direction: +2x, reverse direction: -3x
 	'5',
@@ -117,6 +124,10 @@ SPEED_TABLE = (
 	'INVALID(F)'
 )
 
+# From wikipedia: https://en.wikipedia.org/wiki/NTSC#Frame_rate_conversion
+NTSC_FRAME_RATE = 10000000.*63/88/455/525            # end result: ~29.97
+FRAMES_PER_MILLISECOND = NTSC_FRAME_RATE / 1000.0    # ~0.02996
+MILLSECONDS_PER_FRAME = 1.0 / FRAMES_PER_MILLISECOND # ~33.38
 
 def hexify(s):
 	if isinstance(s, basestring):
@@ -130,12 +141,20 @@ def numify(s):
 	else:
 		return s
 
+class VCRException(Exception):
+	pass
 
-class BadResponseError(Exception):
+class BadResponseError(VCRException):
 	def __init__(self, expected, got):
 		message = 'Expected {}, got {}'.format(hexify(expected),hexify(got))
 		Exception.__init__(self, message)
 		self.expected = expected
+		self.got = got
+
+class ErrorWhileReadingError(VCRException):
+	def __init__(self, got):
+		message = 'got {} when reading response'.format(hexify(got))
+		Exception.__init__(self, message)
 		self.got = got
 
 def translate_bits(num_or_char, bit_meanings):
@@ -145,6 +164,38 @@ def translate_bits(num_or_char, bit_meanings):
 		if ((1<<i) & num) and meaning is not None:
 			out.append(meaning)
 	return out 
+
+class VCRTime(object):
+	def __init__(self, raw_time):
+		self.raw_time = raw_time
+
+	@property
+	def hours(self):
+		return int(self.raw_time[0:2])
+
+	@property
+	def minutes(self):
+		return int(self.raw_time[2:4])
+
+	@property
+	def seconds(self):
+		return int(self.raw_time[4:6])
+
+	@property
+	def frames(self):
+		return int(self.raw_time[6:8])
+
+	@property
+	def timedelta(self):
+		return datetime.timedelta(
+			hours=self.hours, 
+			minutes = self.minutes, 
+			seconds= self.seconds, 
+			milliseconds=self.frames*MILLSECONDS_PER_FRAME
+		)
+
+	def __repr__(self):
+		return 'VCRTime({0.hours}h, {0.minutes}m, {0.seconds}s, {0.frames} frames)'.format(self)
 
 class VCR(object):
 	def __init__(self, port, baud = 9600):
@@ -175,12 +226,26 @@ class VCR(object):
 		SPEED  = SPEED_TABLE[ord(data[4]) & 0xF]
 		return modes + [SPEED]
 
+
 	def rewind_to_beginning(self):
 		self.oneshot(REW)
 		self.wait_until_mode('REW', timeout = 10)
 		self.wait_until_mode('STOP')
 		# TODO: Should we have some kind of timeout for STOP?
 		# What if the VCR errors out and powers off?
+
+	def play_to_end(self):
+		self.oneshot(PLAY)
+		self.wait_until_mode('PLAY', timeout = 10)
+		self.wait_until_mode('STOP')
+		# TODO: Should we have some kind of timeout for STOP?
+		# What if the VCR errors out and powers off?
+
+	def get_ctl_time(self):
+		return VCRTime(self.converse(CURRENT_CTL_SENSE, 8, check=True))
+	
+	def get_ltc_time(self):
+		return VCRTime(self.converse(CURRENT_LTC_SENSE, 8, check=True))
 
 	def wait_until_mode(self, mode, timeout = None):
 		abort_time = None if timeout is None else time.time() + timeout
@@ -195,15 +260,32 @@ class VCR(object):
 		if ret != '\x0A':
 			raise BadResponseError(ACK, ret)
 
-	def converse(self, command, num_bytes=1):
+	def converse(self, command, num_bytes=1, check=False):
 		vcr = self.vcr
-		vcr.write(chr(command))
-		data = vcr.read(num_bytes)
-		# per the spec, you have to wait at least 5 msec after getting a 
-		# response before sending another command
-		# TODO: be smarter about this, and only wait if needed.
-		time.sleep(0.005)
-		return data
+		try:
+			vcr.write(chr(command))
+			if check:
+				# if we're expecting a multibyte reply and it instead returns 
+				# an error, we'd otherwise hang waiting forever for a reply
+				# that isn't comming. So check if the first byte is an error.
+				# This assumes that the first byte can never legitimately be 
+				# NAK or ERROR, though! 
+
+				first_byte = vcr.read(1)
+				if ord(first_byte) in (NAK, ERROR):
+					raise ErrorWhileReadingError(first_byte)
+				if num_bytes>1:
+					data = vcr.read(num_bytes-1)
+					return first_byte + data
+				else:
+					return first_byte
+			else:
+				return vcr.read(num_bytes)
+		finally:
+			# per the spec, you have to wait at least 5 msec after getting a 
+			# response before sending another command
+			# TODO: be smarter about this, and only wait if needed.
+			time.sleep(0.005)
 
 
 if __name__ == '__main__':
@@ -214,6 +296,15 @@ if __name__ == '__main__':
 	else:
 		print 'WARNING: NOT A VCR! POSSIBLY A DECEPTICON! RUN!'
 	vcr.oneshot(POWER_ON)
-	start = time.time()
-	vcr.rewind_to_beginning()
-	print 'Rewound in {:0.2f} seconds'.format(time.time()-start)
+	if 0:
+		vcr.rewind_to_beginning()
+		
+		start = time.time()
+		vcr.oneshot(FF)
+		time.sleep(5)
+		vcr.wait_until_mode('STOP')
+		print 'went to end in {:0.2f} seconds'.format(time.time()-start)
+
+	current_time = vcr.get_ctl_time()
+	print current_time
+
